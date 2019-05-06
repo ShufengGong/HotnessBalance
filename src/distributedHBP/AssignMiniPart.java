@@ -7,6 +7,7 @@ import gnu.trove.set.hash.TIntHashSet;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.StringTokenizer;
 
 import org.apache.hadoop.conf.Configuration;
@@ -21,23 +22,24 @@ import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.Mapper.Context;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.mapreduce.lib.output.MultipleOutputs;
 
-public class DHBP {
+public class AssignMiniPart {
 
 	public static class HBPMapper extends
 			Mapper<Object, Text, IntWritable, Text> {
-		
+
 		private int vnum;
 		private int pnum;
 		private int range;
-		
+
 		@Override
 		public void setup(Context context) throws IOException {
 			Configuration conf = context.getConfiguration();
 			vnum = conf.getInt("vnum", -1);
 			pnum = conf.getInt("pnum", -1);
-			range = vnum/pnum + 1;
-			if(vnum == -1 || pnum == -1){
+			range = vnum / pnum + 1;
+			if (vnum == -1 || pnum == -1) {
 				System.err.println("invalid vnum != pnum");
 			}
 		}
@@ -55,105 +57,134 @@ public class DHBP {
 
 	public static class HBPReducer extends
 			Reducer<IntWritable, Text, IntWritable, Text> {
-		
+
 		private int vnum;
 		private int pnum;
+		private int k_;
 		private int range;
-		private double commThres;
+		TIntHashSet[] parts;
+		double alpha;
+		double gamma;
+		private MultipleOutputs mos;
 
 		@Override
 		protected void setup(Context context) {
 			Configuration conf = context.getConfiguration();
 			vnum = conf.getInt("vnum", -1);
 			pnum = conf.getInt("pnum", -1);
-			range = vnum/pnum + 1;
-			if(vnum == -1 || pnum == -1){
-				System.err.println("invalid vnum != pnum");
+			k_ = conf.getInt("k_", -1);
+			alpha = conf.getFloat("alpha", -1);
+			gamma = conf.getFloat("gamma", -1);
+			if (vnum == -1 || pnum == -1 || k_ == -1 || gamma == -1
+					|| alpha == -1) {
+				System.err.println("invalid parameter");
 			}
+			range = vnum / pnum + 1;
+			parts = new TIntHashSet[k_];
+			mos = new MultipleOutputs(context);
 		}
 
 		@Override
 		public void reduce(IntWritable key, Iterable<Text> values,
 				Context context) throws IOException, InterruptedException {
-			int prtId = key.get();
-			Vertex[] vertex = new Vertex[range];
-			SuperVertex[] superVertex = new SuperVertex[range];
-			
+			int partId = key.get();
+			ArrayList<Vertex> listH = new ArrayList<Vertex>();
+			ArrayList<Vertex> listC = new ArrayList<Vertex>();
+
+			double hotsumH = 0;
+			double hotsumC = 0;
+
 			for (Text value : values) {
 				StringTokenizer stk = new StringTokenizer(value.toString());
+				String flag = stk.nextToken();
+				stk.nextToken(); // skip virtual id that for current hash
+									// partition
 				int id = Integer.parseInt(stk.nextToken());
 				int idIndex = id % range;
-				double hotness = Double.parseDouble(stk.nextToken());
+				double hot = Double.parseDouble(stk.nextToken());
 				TIntDoubleHashMap neighbor = new TIntDoubleHashMap();
-				while(stk.hasMoreTokens()){
+				while (stk.hasMoreTokens()) {
 					int nid = Integer.parseInt(stk.nextToken());
 					int nidIndex = nid % range;
 					double comm = Double.parseDouble(stk.nextToken());
 					neighbor.put(nid, comm);
-					if(comm > commThres){
-						if(nid / range == prtId){
-							if(superVertex[idIndex] == superVertex[nidIndex]){
-								if(superVertex[idIndex] == null){
-									superVertex[idIndex] = new SuperVertex(id, hotness);
-									superVertex[nidIndex] = superVertex[idIndex];
-									superVertex[nidIndex].add(nid);
-								}
-							}else{
-								if(superVertex[idIndex] == null){
-									superVertex[idIndex] = superVertex[nidIndex];
-									superVertex[idIndex].add(id);
-								}else if(superVertex[nidIndex] == null){
-									superVertex[nidIndex] = superVertex[idIndex];
-									superVertex[nidIndex].add(id);
-								}else{
-									TIntIterator itr = superVertex[nidIndex].ids.iterator();
-									while(itr.hasNext()){
-										int iid = itr.next();
-										superVertex[iid % range] = superVertex[idIndex];
-									}
-									superVertex[idIndex].merge(superVertex[nidIndex]);
-									superVertex[nidIndex] = superVertex[idIndex];
-								}
-							}
-						}
-					}
 				}
-				vertex[id % range] = new Vertex(id, hotness, neighbor);
-			}
-			for(int i = 0; i < range; i++){
-				Vertex v = vertex[i];
-				if(v != null){
-					SuperVertex sv = superVertex[i];
-					if(sv != null){
-						TIntHashSet ids = sv.ids;
-						TIntIterator itr = ids.iterator();
-						while(itr.hasNext()){
-							int id = itr.next();
-							if(id % range != i){
-								v.merge(vertex[id % range]);
-								vertex[id % range] = null;
-							}
-						}
-					}
+				Vertex vertex = new Vertex(id, hot, neighbor);
+				if (flag.equals("h")) {
+					listH.add(vertex);
+					hotsumH += hot;
+				} else {
+					listC.add(vertex);
+					hotsumC += hot;
 				}
 			}
 			
-			for(int i = 0; i < range; i++){
-				Vertex v = vertex[i];
-				if(v != null){
-					String s = v.id + " ";
-					for(int id : v.ids._set){
-						s += id + " ";
-					}
-				}
-			}
-			
+			assign(partId, hotsumH, listH, mos, "H");
+			assign(partId, hotsumC, listC, mos, "C");
+
 		}
-		
+
+		public void assign(int partId, double hotsum, ArrayList<Vertex> list,
+				MultipleOutputs mos, String flag)
+				throws IOException, InterruptedException {
+			double v = 1.1;
+			double miu = v * hotsum / k_;
+			double[] hotness = new double[k_]; 
+			int size = list.size();
+			for (int j = 0; j < size; j++) {
+				Vertex vertex = list.get(j);
+				double hot = vertex.hotness;
+				TIntDoubleHashMap neighbor = vertex.neighbor;
+				double score = 0;
+				double maxScore = -Double.MAX_VALUE;
+				int maxPart = -1;
+				for (int i = 0; i < k_; i++) {
+					if (hotness[i] <= miu) {
+						score = getScore(neighbor, parts[i], hotness[i], hot,
+								alpha, gamma);
+						if (maxScore < score) {
+							maxScore = score;
+							maxPart = i;
+						}
+					}
+					// System.out.print(score + " ");
+				}
+				// System.out.println();
+				if (maxPart == -1) {
+					System.out.println("there is no insert!!!");
+					System.exit(0);
+				}
+				parts[maxPart].add(vertex.id);
+				hotness[maxPart] += hot;
+				mos.write(flag + "miniPartInfo", new IntWritable(vertex.id),
+						new Text((partId * pnum + maxPart) + ""));
+			}
+		}
 
 		@Override
 		protected void cleanup(Context context) throws IOException,
 				InterruptedException {
+
+		}
+
+		public double getScore(TIntDoubleHashMap neighbor,
+				TIntHashSet partition, double partHotness, double hotness,
+				double alpha, double gamma) {
+			double score = 0;
+			TIntDoubleIterator itr = neighbor.iterator();
+			while (itr.hasNext()) {
+				itr.advance();
+				int id = itr.key();
+				if (partition.contains(id)) {
+					score += itr.value();
+				}
+			}
+
+			double deltaC = alpha
+					* (Math.pow(partHotness + hotness, gamma) - Math.pow(
+							partHotness, gamma));
+
+			return score - deltaC;
 
 		}
 	}
@@ -180,7 +211,7 @@ public class DHBP {
 			if (args[i].equals("-vnum")) {
 				vnum = Integer.parseInt(args[++i]);
 			}
-			if(args[i].equals("-rnum")){
+			if (args[i].equals("-rnum")) {
 				rnum = Integer.parseInt(args[++i]);
 			}
 		}
@@ -195,14 +226,14 @@ public class DHBP {
 					.println("invalid parameters =======================================");
 			return;
 		}
-		
+
 		System.out.println("start +++++++++++++++++++");
 
 		conf.setInt("vnum", vnum);
 		conf.setInt("pnum", pnum);
 		try {
 			Job job = new Job(conf, "DHBP");
-			job.setJarByClass(DHBP.class);
+			job.setJarByClass(AssignMiniPart.class);
 			job.setMapperClass(HBPMapper.class);
 			job.setMapOutputKeyClass(IntWritable.class);
 			job.setMapOutputValueClass(Text.class);
