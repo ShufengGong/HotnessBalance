@@ -26,7 +26,7 @@ import org.apache.hadoop.mapreduce.lib.output.MultipleOutputs;
 
 public class AssignMiniPart {
 
-	public static class HBPMapper extends
+	public static class ASNMapper extends
 			Mapper<Object, Text, IntWritable, Text> {
 
 		private int vnum;
@@ -55,11 +55,9 @@ public class AssignMiniPart {
 		}
 	}
 
-	public static class HBPReducer extends
+	public static class ASNReducer extends
 			Reducer<IntWritable, Text, IntWritable, Text> {
 
-		private int vnum;
-		private int pnum;
 		private int k_;
 		private int range;
 		TIntHashSet[] parts;
@@ -70,16 +68,13 @@ public class AssignMiniPart {
 		@Override
 		protected void setup(Context context) {
 			Configuration conf = context.getConfiguration();
-			vnum = conf.getInt("vnum", -1);
-			pnum = conf.getInt("pnum", -1);
 			k_ = conf.getInt("k_", -1);
 			alpha = conf.getFloat("alpha", -1);
 			gamma = conf.getFloat("gamma", -1);
-			if (vnum == -1 || pnum == -1 || k_ == -1 || gamma == -1
+			if (k_ == -1 || gamma == -1
 					|| alpha == -1) {
 				System.err.println("invalid parameter");
 			}
-			range = vnum / pnum + 1;
 			parts = new TIntHashSet[k_];
 			mos = new MultipleOutputs(context);
 		}
@@ -100,12 +95,10 @@ public class AssignMiniPart {
 				stk.nextToken(); // skip virtual id that for current hash
 									// partition
 				int id = Integer.parseInt(stk.nextToken());
-				int idIndex = id % range;
 				double hot = Double.parseDouble(stk.nextToken());
 				TIntDoubleHashMap neighbor = new TIntDoubleHashMap();
 				while (stk.hasMoreTokens()) {
 					int nid = Integer.parseInt(stk.nextToken());
-					int nidIndex = nid % range;
 					double comm = Double.parseDouble(stk.nextToken());
 					neighbor.put(nid, comm);
 				}
@@ -156,8 +149,8 @@ public class AssignMiniPart {
 				}
 				parts[maxPart].add(vertex.id);
 				hotness[maxPart] += hot;
-				mos.write(flag + "miniPartInfo", new IntWritable(vertex.id),
-						new Text((partId * pnum + maxPart) + ""));
+				mos.write("miniPartInfo", new IntWritable(vertex.id),
+						new Text((partId * k_ + maxPart) + ""));
 			}
 		}
 
@@ -234,10 +227,10 @@ public class AssignMiniPart {
 		try {
 			Job job = new Job(conf, "DHBP");
 			job.setJarByClass(AssignMiniPart.class);
-			job.setMapperClass(HBPMapper.class);
+			job.setMapperClass(ASNMapper.class);
 			job.setMapOutputKeyClass(IntWritable.class);
 			job.setMapOutputValueClass(Text.class);
-			job.setReducerClass(HBPReducer.class);
+			job.setReducerClass(ASNReducer.class);
 			job.setNumReduceTasks(rnum);
 			job.setOutputKeyClass(IntWritable.class);
 			job.setOutputValueClass(Text.class);
