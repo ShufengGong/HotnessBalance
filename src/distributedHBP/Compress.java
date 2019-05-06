@@ -1,5 +1,6 @@
 package distributedHBP;
 
+import gnu.trove.iterator.TIntDoubleIterator;
 import gnu.trove.map.hash.TIntDoubleHashMap;
 import gnu.trove.set.hash.TIntHashSet;
 
@@ -59,7 +60,7 @@ public class Compress {
 		private int pnum;
 		private int k_;
 		private int[] vidToSVid;
-//		private int[] vidToSVidC;
+		private MultipleOutputs mos;
 
 		@Override
 		public void setup(Context context) throws IOException {
@@ -82,28 +83,19 @@ public class Compress {
 					int svid = Integer.parseInt(ss[1]);
 					vidToSVid[vid] = svid;
 				}
-
-//				BufferedReader brC = new BufferedReader(new FileReader(
-//						cachePath[1].toString()));
-//				while ((line = brC.readLine()) != null) {
-//					String[] ss = line.split("\\s+");
-//					int vid = Integer.parseInt(ss[0]);
-//					int svid = Integer.parseInt(ss[1]);
-//					vidToSVidC[vid] = svid;
-//				}
 			}
-
+			mos = new MultipleOutputs(context);
 		}
 
 		@Override
 		public void reduce(IntWritable key, Iterable<Text> values,
-				Context context) {
+				Context context) throws IOException, InterruptedException {
 			int partId = key.get();
 			Vertex[] listH = new Vertex[k_];
 			Vertex[] listC = new Vertex[k_];
 			for(int i = 0; i < k_; i++){
-				listH[i] = new Vertex(partId * k_ + i, 0, new TIntDoubleHashMap());
-				listC[i] = new Vertex(partId * k_ + i, 0, new TIntDoubleHashMap());
+				listH[i] = new Vertex(partId * 2 * k_ + i, 0, new TIntDoubleHashMap());
+				listC[i] = new Vertex(partId * 2 * k_ + i + k_, 0, new TIntDoubleHashMap());
 			}
 
 			for (Text value : values) {
@@ -115,18 +107,52 @@ public class Compress {
 				double hot = Double.parseDouble(stk.nextToken());
 				if (flag.equals("H")) {
 					int svid = vidToSVid[id];
-					int index = svid-k_*partId;
+					int index = svid-2 * k_ * partId;
 					listH[index].hotness += hot;
 					while (stk.hasMoreTokens()) {
 						int nid = Integer.parseInt(stk.nextToken());
 						double comm = Double.parseDouble(stk.nextToken());
 						int nsvid = vidToSVid[nid];
-						listH[index].neighbor
+						if(listH[index].neighbor.containsKey(nsvid)){
+							listH[index].neighbor.put(nsvid, listH[index].neighbor.get(nsvid) + comm);
+						}
 					}
 				} else {
-
+					int svid = vidToSVid[id];
+					int index = svid-2 * k_ * partId - k_;
+					listC[index].hotness += hot;
+					while (stk.hasMoreTokens()) {
+						int nid = Integer.parseInt(stk.nextToken());
+						double comm = Double.parseDouble(stk.nextToken());
+						int nsvid = vidToSVid[nid];
+						if(listC[index].neighbor.containsKey(nsvid)){
+							listC[index].neighbor.put(nsvid, listC[index].neighbor.get(nsvid) + comm);
+						}
+					}
 				}
-
+			}
+			for(int i = 0; i < listH.length; i++){
+				String line = "";
+				TIntDoubleHashMap neighbor = listH[i].neighbor;
+				TIntDoubleIterator itr = neighbor.iterator();
+				while(itr.hasNext()){
+					itr.advance();
+					line += itr.key() + " " + itr.value() + " ";
+				}
+				mos.write("superhot", new IntWritable(listH[i].id),
+							new Text(line));
+			}
+			
+			for(int i = 0; i < listC.length; i++){
+				String line = "";
+				TIntDoubleHashMap neighbor = listC[i].neighbor;
+				TIntDoubleIterator itr = neighbor.iterator();
+				while(itr.hasNext()){
+					itr.advance();
+					line += itr.key() + " " + itr.value() + " ";
+				}
+				mos.write("supercool", new IntWritable(listC[i].id),
+							new Text(line));
 			}
 		}
 

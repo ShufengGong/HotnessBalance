@@ -71,8 +71,7 @@ public class AssignMiniPart {
 			k_ = conf.getInt("k_", -1);
 			alpha = conf.getFloat("alpha", -1);
 			gamma = conf.getFloat("gamma", -1);
-			if (k_ == -1 || gamma == -1
-					|| alpha == -1) {
+			if (k_ == -1 || gamma == -1 || alpha == -1) {
 				System.err.println("invalid parameter");
 			}
 			parts = new TIntHashSet[k_];
@@ -111,18 +110,18 @@ public class AssignMiniPart {
 					hotsumC += hot;
 				}
 			}
-			
+
 			assign(partId, hotsumH, listH, mos, "H");
 			assign(partId, hotsumC, listC, mos, "C");
 
 		}
 
 		public void assign(int partId, double hotsum, ArrayList<Vertex> list,
-				MultipleOutputs mos, String flag)
-				throws IOException, InterruptedException {
+				MultipleOutputs mos, String flag) throws IOException,
+				InterruptedException {
 			double v = 1.1;
 			double miu = v * hotsum / k_;
-			double[] hotness = new double[k_]; 
+			double[] hotness = new double[k_];
 			int size = list.size();
 			for (int j = 0; j < size; j++) {
 				Vertex vertex = list.get(j);
@@ -149,8 +148,13 @@ public class AssignMiniPart {
 				}
 				parts[maxPart].add(vertex.id);
 				hotness[maxPart] += hot;
-				mos.write("miniPartInfo", new IntWritable(vertex.id),
-						new Text((partId * k_ + maxPart) + ""));
+				if (flag.equals("H")) {
+					mos.write("miniPartInfo", new IntWritable(vertex.id),
+							new Text((partId * 2 * k_ + maxPart) + ""));
+				} else {
+					mos.write("miniPartInfo", new IntWritable(vertex.id),
+							new Text((partId * 2 * k_ + maxPart + k_) + ""));
+				}
 			}
 		}
 
